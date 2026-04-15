@@ -13,57 +13,47 @@ const client = new line.Client(config);
 let parkingData = {};
 
 // =========================
-// 🔥 全角→半角変換（追加）
+// 全角→半角変換
 // =========================
 function normalizeText(text) {
   return text
-    .replace(/[０-９]/g, (s) =>
+    .replace(/[０-９]/g, s =>
       String.fromCharCode(s.charCodeAt(0) - 0xFEE0)
     )
     .replace(/　/g, ' ')
-    .replace(/[Ａ-Ｚａ-ｚ]/g, (s) =>
+    .replace(/[Ａ-Ｚａ-ｚ]/g, s =>
       String.fromCharCode(s.charCodeAt(0) - 0xFEE0)
     );
 }
 
 // =========================
-// 日本語パース
+// クイックリプライ
 // =========================
-function parseSetting(text) {
-  const result = {
-    unitType: 'minute',
-    unitValue: 30,
-    ratePerUnit: 100,
-    maxPrice: null,
-    freeMinutes: 0,
-  };
-
-  if (text.includes('時間')) result.unitType = 'hour';
-
-  const unitMatch = text.match(/(\d+)(分|時間)/);
-  if (unitMatch) result.unitValue = Number(unitMatch[1]);
-
-  const rateMatch = text.match(/(\d+)\s*円?/);
-  if (rateMatch) result.ratePerUnit = Number(rateMatch[1]);
-
-  const maxMatch = text.match(/最大\s*(\d+)円/);
-  if (maxMatch) result.maxPrice = Number(maxMatch[1]);
-
-  const freeMatch = text.match(/無料\s*(\d+)分/);
-  if (freeMatch) result.freeMinutes = Number(freeMatch[1]);
-
-  return result;
+function replyWithQuickReply(replyToken, text, options) {
+  return client.replyMessage(replyToken, {
+    type: 'text',
+    text,
+    quickReply: {
+      items: options.map(opt => ({
+        type: 'action',
+        action: {
+          type: 'message',
+          label: opt,
+          text: opt,
+        },
+      })),
+    },
+  });
 }
 
 // =========================
-// 日跨ぎ対応 料金計算
+// 料金計算（日跨ぎ対応）
 // =========================
 function calculatePrice(data, now) {
   const diffMs = now - new Date(data.startTime);
   const totalMinutes = Math.ceil(diffMs / (1000 * 60));
 
   const minutesPerDay = 1440;
-
   const days = Math.floor(totalMinutes / minutesPerDay);
   let remainingMinutes = totalMinutes % minutesPerDay;
 
@@ -108,17 +98,14 @@ async function checkNotifications() {
 
     const price = calculatePrice(data, now);
 
-    // 料金更新通知
     if (price > (data.lastNotifiedPrice || 0)) {
       await client.pushMessage(userId, {
         type: 'text',
         text: `💰 ${price}円になりました`,
       });
-
       data.lastNotifiedPrice = price;
     }
 
-    // 最大料金通知
     if (
       data.maxPrice &&
       price % data.maxPrice === 0 &&
@@ -128,7 +115,6 @@ async function checkNotifications() {
         type: 'text',
         text: `🚨 最大料金に到達しました`,
       });
-
       data.notifiedMax = true;
     }
 
@@ -139,16 +125,13 @@ async function checkNotifications() {
 
     const diffMs = now - new Date(data.startTime);
     const diffMins = Math.ceil(diffMs / (1000 * 60));
-
     const next = unitMinutes - (diffMins % unitMinutes);
 
-    // 5分前通知
     if (next <= 5 && !data.notifiedSoon) {
       await client.pushMessage(userId, {
         type: 'text',
         text: `⏳ あと${next}分で料金が上がります`,
       });
-
       data.notifiedSoon = true;
     }
 
@@ -158,9 +141,7 @@ async function checkNotifications() {
   }
 }
 
-// =========================
-// 疑似cron（※本番NG）
-// =========================
+// 疑似cron（本番NG）
 setInterval(checkNotifications, 60000);
 
 // =========================
@@ -189,8 +170,6 @@ async function handleEvent(event) {
   if (event.type !== 'message') return;
 
   const userId = event.source.userId;
-
-  // 🔥 ここで正規化（超重要）
   let text = normalizeText(event.message.text);
 
   const now = new Date(
@@ -199,22 +178,78 @@ async function handleEvent(event) {
 
   let replyText = '';
 
-  // =========================
-  // 料金設定（自然言語）
-  // =========================
-  if (text.includes('円')) {
-    const parsed = parseSetting(text);
+  // 初期化
+  if (!parkingData[userId]) {
+    parkingData[userId] = { step: null, temp: {} };
+  }
 
-    parkingData[userId] = {
-      ...parkingData[userId],
-      ...parsed,
-    };
+  // =========================
+  // 設定開始
+  // =========================
+  if (text === '開始') {
+    parkingData[userId] = { step: 'unitType', temp: {} };
 
-    replyText =
-      `✅ 設定完了\n` +
-      `${parsed.unitValue}${parsed.unitType === 'hour' ? '時間' : '分'}ごとに${parsed.ratePerUnit}円\n` +
-      (parsed.maxPrice ? `最大${parsed.maxPrice}円\n` : '') +
-      `無料${parsed.freeMinutes}分`;
+    return replyWithQuickReply(
+      event.replyToken,
+      '料金設定を始めます👇\n単位を選んでください',
+      ['分', '時間']
+    );
+  }
+
+  // =========================
+  // ステップ処理
+  // =========================
+  else if (parkingData[userId].step) {
+    const state = parkingData[userId];
+
+    switch (state.step) {
+
+      case 'unitType':
+        state.temp.unitType = text === '時間' ? 'hour' : 'minute';
+        state.step = 'unitValue';
+        return client.replyMessage(event.replyToken, {
+          type: 'text',
+          text: '何分（何時間）ごと？\n例：30 または 1',
+        });
+
+      case 'unitValue':
+        state.temp.unitValue = Number(text);
+        state.step = 'rate';
+        return client.replyMessage(event.replyToken, {
+          type: 'text',
+          text: '料金は？（円）\n例：100',
+        });
+
+      case 'rate':
+        state.temp.ratePerUnit = Number(text);
+        state.step = 'max';
+        return replyWithQuickReply(
+          event.replyToken,
+          '最大料金は？',
+          ['0', '500', '800']
+        );
+
+      case 'max':
+        state.temp.maxPrice = Number(text) || null;
+        state.step = 'free';
+        return replyWithQuickReply(
+          event.replyToken,
+          '無料時間は？',
+          ['0', '30', '60']
+        );
+
+      case 'free':
+        state.temp.freeMinutes = Number(text);
+
+        parkingData[userId] = {
+          ...state.temp,
+        };
+
+        return client.replyMessage(event.replyToken, {
+          type: 'text',
+          text: '✅ 設定完了！\n「駐車開始」と送ってください',
+        });
+    }
   }
 
   // =========================
@@ -222,15 +257,20 @@ async function handleEvent(event) {
   // =========================
   else if (text === '駐車開始') {
     if (!parkingData[userId]?.ratePerUnit) {
-      replyText =
-        '料金を入力してください👇\n例：30分で100円 最大800円';
-    } else {
-      parkingData[userId].startTime = now;
-      parkingData[userId].lastNotifiedPrice = 0;
-      parkingData[userId].notifiedMax = false;
-
-      replyText = `🚗 駐車開始\n${now.toLocaleTimeString('ja-JP')}`;
+      return client.replyMessage(event.replyToken, {
+        type: 'text',
+        text: '先に「開始」と送って設定してください',
+      });
     }
+
+    parkingData[userId].startTime = now;
+    parkingData[userId].lastNotifiedPrice = 0;
+    parkingData[userId].notifiedMax = false;
+
+    return client.replyMessage(event.replyToken, {
+      type: 'text',
+      text: `🚗 駐車開始\n${now.toLocaleTimeString('ja-JP')}`,
+    });
   }
 
   // =========================
@@ -259,9 +299,10 @@ async function handleEvent(event) {
   else {
     replyText =
       '👇使い方\n' +
-      '① 30分で100円 最大800円\n' +
-      '② 駐車開始\n' +
-      '③ 今の料金';
+      '①「開始」\n' +
+      '② ボタンで料金設定\n' +
+      '③ 駐車開始\n' +
+      '④ 今の料金';
   }
 
   return client.replyMessage(event.replyToken, {
