@@ -13,6 +13,20 @@ const client = new line.Client(config);
 let parkingData = {};
 
 // =========================
+// 🔥 全角→半角変換（追加）
+// =========================
+function normalizeText(text) {
+  return text
+    .replace(/[０-９]/g, (s) =>
+      String.fromCharCode(s.charCodeAt(0) - 0xFEE0)
+    )
+    .replace(/　/g, ' ')
+    .replace(/[Ａ-Ｚａ-ｚ]/g, (s) =>
+      String.fromCharCode(s.charCodeAt(0) - 0xFEE0)
+    );
+}
+
+// =========================
 // 日本語パース
 // =========================
 function parseSetting(text) {
@@ -29,13 +43,13 @@ function parseSetting(text) {
   const unitMatch = text.match(/(\d+)(分|時間)/);
   if (unitMatch) result.unitValue = Number(unitMatch[1]);
 
-  const rateMatch = text.match(/(\d+)円/);
+  const rateMatch = text.match(/(\d+)\s*円?/);
   if (rateMatch) result.ratePerUnit = Number(rateMatch[1]);
 
-  const maxMatch = text.match(/最大(\d+)円/);
+  const maxMatch = text.match(/最大\s*(\d+)円/);
   if (maxMatch) result.maxPrice = Number(maxMatch[1]);
 
-  const freeMatch = text.match(/無料(\d+)分/);
+  const freeMatch = text.match(/無料\s*(\d+)分/);
   if (freeMatch) result.freeMinutes = Number(freeMatch[1]);
 
   return result;
@@ -60,12 +74,10 @@ function calculatePrice(data, now) {
 
   let totalPrice = 0;
 
-  // 日ごとの最大料金
   if (data.maxPrice) {
     totalPrice += days * data.maxPrice;
   }
 
-  // 残り時間
   if (remainingMinutes <= data.freeMinutes) {
     return totalPrice;
   }
@@ -106,7 +118,7 @@ async function checkNotifications() {
       data.lastNotifiedPrice = price;
     }
 
-    // 最大料金通知（1日単位）
+    // 最大料金通知
     if (
       data.maxPrice &&
       price % data.maxPrice === 0 &&
@@ -120,7 +132,6 @@ async function checkNotifications() {
       data.notifiedMax = true;
     }
 
-    // 次の加算までの時間
     let unitMinutes =
       data.unitType === 'hour'
         ? data.unitValue * 60
@@ -131,6 +142,7 @@ async function checkNotifications() {
 
     const next = unitMinutes - (diffMins % unitMinutes);
 
+    // 5分前通知
     if (next <= 5 && !data.notifiedSoon) {
       await client.pushMessage(userId, {
         type: 'text',
@@ -147,7 +159,7 @@ async function checkNotifications() {
 }
 
 // =========================
-// 擬似cron（※本番NG）
+// 疑似cron（※本番NG）
 // =========================
 setInterval(checkNotifications, 60000);
 
@@ -177,7 +189,9 @@ async function handleEvent(event) {
   if (event.type !== 'message') return;
 
   const userId = event.source.userId;
-  const text = event.message.text;
+
+  // 🔥 ここで正規化（超重要）
+  let text = normalizeText(event.message.text);
 
   const now = new Date(
     new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" })
@@ -239,6 +253,9 @@ async function handleEvent(event) {
     }
   }
 
+  // =========================
+  // その他
+  // =========================
   else {
     replyText =
       '👇使い方\n' +
