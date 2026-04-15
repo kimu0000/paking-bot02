@@ -18,9 +18,20 @@ module.exports = async (req, res) => {
     return res.status(405).send('Method Not Allowed');
   }
 
-  console.log('body:', req.body);
+  let body;
 
-  const events = req.body?.events || [];
+  try {
+    body = typeof req.body === 'string'
+      ? JSON.parse(req.body)
+      : req.body;
+  } catch (e) {
+    console.error('JSON parseエラー:', e);
+    return res.status(400).send('Invalid JSON');
+  }
+
+  console.log('body:', body);
+
+  const events = body?.events || [];
 
   if (!events.length) {
     console.log('イベントなし');
