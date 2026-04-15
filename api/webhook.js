@@ -30,7 +30,7 @@ async function handleEvent(event) {
 
   const userId = event.source.userId;
   const text = event.message.text;
-  const now = new Date();
+  const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" }));
 
   let replyText = '';
 
