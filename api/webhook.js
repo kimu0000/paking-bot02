@@ -262,7 +262,38 @@ async function handleEvent(event) {
 
         parkingData[userId] = { ...state.temp };
 
-        return sendMainMenu(event.replyToken, '設定完了');
+        return client.replyMessage(event.replyToken, [
+  {
+    type: 'text',
+    text:
+      '✅ 設定完了しました\n' +
+      '「駐車開始」をタップしてください',
+  },
+  {
+    type: 'flex',
+    altText: 'メニュー',
+    contents: {
+      type: 'bubble',
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'lg',
+        contents: [
+          {
+            type: 'button',
+            style: 'primary',
+            color: '#007BFF',
+            action: {
+              type: 'message',
+              label: '駐車開始',
+              text: '駐車開始'
+            }
+          }
+        ]
+      }
+    }
+  }
+]);
       }
     }
   }
