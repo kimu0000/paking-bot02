@@ -1,10 +1,4 @@
 const line = require('@line/bot-sdk');
-const { createClient } = require('@supabase/supabase-js');
-
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
-);
 
 const config = {
   channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
@@ -13,49 +7,20 @@ const config = {
 
 const client = new line.Client(config);
 
+let parkingData = {};
+
 module.exports = async (req, res) => {
   if (req.method !== 'POST') {
     return res.status(405).send('Method Not Allowed');
   }
 
-  // 🔥 body安全取得（最強版）
-  let body = {};
+  const events = req.body.events;
 
   try {
-    if (req.body) {
-      body = typeof req.body === 'string'
-        ? JSON.parse(req.body)
-        : req.body;
-    } else {
-      console.log('bodyが空');
-    }
-  } catch (e) {
-    console.error('JSON parseエラー:', e);
-  }
-
-  console.log('body:', body);
-
-  const events = body?.events ?? [];
-
-  if (!events.length) {
-    console.log('イベントなし');
-    return res.status(200).send('OK');
-  }
-
-  try {
-    // 🔥 Promise.allやめて安全処理
-    for (const event of events) {
-      try {
-        console.log('event:', event);
-        await handleEvent(event);
-      } catch (err) {
-        console.error('event処理エラー:', err);
-      }
-    }
-
+    await Promise.all(events.map(handleEvent));
     res.status(200).send('OK');
   } catch (err) {
-    console.error('Webhook全体エラー:', err);
+    console.error(err);
     res.status(500).end();
   }
 };
@@ -69,82 +34,28 @@ async function handleEvent(event) {
 
   let replyText = '';
 
-  try {
-    // 🟢 駐車開始
-    if (text === '駐車開始') {
-      const { error } = await supabase.from('sessions').insert({
-        user_id: userId,
-        start_time: now,
-        status: 'active',
-      });
+  if (text === '駐車開始') {
+    parkingData[userId] = now;
+    replyText = `駐車を開始しました！\n開始時刻: ${now.toLocaleTimeString('ja-JP')}`;
+  } else if (text === '今の料金' || text === '駐車終了') {
+    const startTime = parkingData[userId];
 
-      if (error) {
-        console.error('INSERTエラー:', error);
-        replyText = '駐車開始時にエラーが発生しました';
+    if (!startTime) {
+      replyText = '駐車データが見つかりません。「駐車開始」と送ってください。';
+    } else {
+      const diffMs = now - startTime;
+      const diffMins = Math.ceil(diffMs / (1000 * 60));
+      const price = Math.ceil(diffMins / 30) * 100;
+
+      if (text === '今の料金') {
+        replyText = `経過時間: ${diffMins}分\n現在の料金: ${price}円です。`;
       } else {
-        replyText = `駐車を開始しました！\n開始時刻: ${now.toLocaleString('ja-JP', {
-          timeZone: 'Asia/Tokyo'
-        })}`;
+        delete parkingData[userId];
+        replyText = `駐車を終了しました。\n合計時間: ${diffMins}分\nお疲れ様でした！`;
       }
     }
-
-    // 🟡 今の料金 or 終了
-    else if (text === '今の料金' || text === '駐車終了') {
-      const { data, error } = await supabase
-        .from('sessions')
-        .select('*')
-        .eq('user_id', userId)
-        .eq('status', 'active')
-        .order('start_time', { ascending: false })
-        .limit(1);
-
-      if (error) {
-        console.error('SELECTエラー:', error);
-        replyText = 'データ取得時にエラーが発生しました';
-      } else {
-        const session = data?.[0];
-
-        if (!session) {
-          replyText = '駐車データが見つかりません。「駐車開始」と送ってください。';
-        } else {
-          const startTime = new Date(session.start_time);
-          const diffMins = Math.ceil((now - startTime) / (1000 * 60));
-          const price = Math.ceil(diffMins / 30) * 100;
-
-          const startTimeJST = startTime.toLocaleString('ja-JP', {
-            timeZone: 'Asia/Tokyo'
-          });
-
-          if (text === '今の料金') {
-            replyText = `開始時刻: ${startTimeJST}\n経過時間: ${diffMins}分\n現在の料金: ${price}円です。`;
-          } else {
-            const { error: updateError } = await supabase
-              .from('sessions')
-              .update({
-                end_time: now,
-                status: 'completed',
-                fee: price,
-              })
-              .eq('id', session.id);
-
-            if (updateError) {
-              console.error('UPDATEエラー:', updateError);
-              replyText = '駐車終了時にエラーが発生しました';
-            } else {
-              replyText = `駐車終了！\n開始時刻: ${startTimeJST}\n時間: ${diffMins}分\n料金: ${price}円`;
-            }
-          }
-        }
-      }
-    }
-
-    else {
-      replyText = '「駐車開始」「今の料金」「駐車終了」と送ってください。';
-    }
-
-  } catch (err) {
-    console.error('handleEventエラー:', err);
-    replyText = '予期せぬエラーが発生しました';
+  } else {
+    replyText = '「駐車開始」「今の料金」「駐車終了」のいずれかを送ってください。';
   }
 
   return client.replyMessage(event.replyToken, {
