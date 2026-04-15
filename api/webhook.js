@@ -1,4 +1,10 @@
 const line = require('@line/bot-sdk');
+const { createClient } = require('@supabase/supabase-js');
+
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_ANON_KEY
+);
 
 const config = {
   channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
@@ -6,8 +12,6 @@ const config = {
 };
 
 const client = new line.Client(config);
-
-let parkingData = {};
 
 module.exports = async (req, res) => {
   if (req.method !== 'POST') {
@@ -34,28 +38,57 @@ async function handleEvent(event) {
 
   let replyText = '';
 
+  // 🟢 駐車開始
   if (text === '駐車開始') {
-    parkingData[userId] = now;
-    replyText = `駐車を開始しました！\n開始時刻: ${now.toLocaleTimeString('ja-JP')}`;
-  } else if (text === '今の料金' || text === '駐車終了') {
-    const startTime = parkingData[userId];
+    const { error } = await supabase.from('sessions').insert({
+      user_id: userId,
+      start_time: now,
+      status: 'active',
+    });
 
-    if (!startTime) {
+    console.log('INSERT:', error);
+
+    replyText = `駐車を開始しました！\n開始時刻: ${now.toLocaleTimeString('ja-JP')}`;
+  }
+
+  // 🟡 今の料金 or 終了
+  else if (text === '今の料金' || text === '駐車終了') {
+    const { data, error } = await supabase
+      .from('sessions')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('status', 'active')
+      .order('start_time', { ascending: false })
+      .limit(1);
+
+    const session = data?.[0];
+
+    if (!session) {
       replyText = '駐車データが見つかりません。「駐車開始」と送ってください。';
     } else {
-      const diffMs = now - startTime;
-      const diffMins = Math.ceil(diffMs / (1000 * 60));
+      const startTime = new Date(session.start_time);
+      const diffMins = Math.ceil((now - startTime) / (1000 * 60));
       const price = Math.ceil(diffMins / 30) * 100;
 
       if (text === '今の料金') {
         replyText = `経過時間: ${diffMins}分\n現在の料金: ${price}円です。`;
       } else {
-        delete parkingData[userId];
-        replyText = `駐車を終了しました。\n合計時間: ${diffMins}分\nお疲れ様でした！`;
+        await supabase
+          .from('sessions')
+          .update({
+            end_time: now,
+            status: 'completed',
+            fee: price,
+          })
+          .eq('id', session.id);
+
+        replyText = `駐車終了！\n時間: ${diffMins}分\n料金: ${price}円`;
       }
     }
-  } else {
-    replyText = '「駐車開始」「今の料金」「駐車終了」のいずれかを送ってください。';
+  }
+
+  else {
+    replyText = '「駐車開始」「今の料金」「駐車終了」と送ってください。';
   }
 
   return client.replyMessage(event.replyToken, {
