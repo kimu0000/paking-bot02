@@ -18,7 +18,14 @@ module.exports = async (req, res) => {
     return res.status(405).send('Method Not Allowed');
   }
 
-  const events = req.body.events;
+  console.log('body:', req.body);
+
+  const events = req.body?.events || [];
+
+  if (!events.length) {
+    console.log('イベントなし');
+    return res.status(200).send('OK');
+  }
 
   try {
     await Promise.all(events.map(handleEvent));
@@ -80,7 +87,6 @@ async function handleEvent(event) {
           const diffMins = Math.ceil((now - startTime) / (1000 * 60));
           const price = Math.ceil(diffMins / 30) * 100;
 
-          // 日本時間表示
           const startTimeJST = startTime.toLocaleString('ja-JP', {
             timeZone: 'Asia/Tokyo'
           });
