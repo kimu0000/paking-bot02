@@ -184,7 +184,16 @@ async function handleEvent(event) {
     switch (state.step) {
 
       case 'unitType':
-        state.temp.unitType = text === '時間' ? 'hour' : 'minute';
+        if (text === '分') {
+  state.temp.unitType = 'minute';
+} else if (text === '時間') {
+  state.temp.unitType = 'hour';
+} else {
+  return client.replyMessage(event.replyToken, {
+    type: 'text',
+    text: '「分」か「時間」を選んでください',
+  });
+}
         state.step = 'unitValue';
         return client.replyMessage(event.replyToken, {
           type: 'text',
