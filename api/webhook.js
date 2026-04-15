@@ -7,7 +7,18 @@ const config = {
 
 const client = new line.Client(config);
 
+// =========================
+// 仮データ
+// =========================
 let parkingData = {};
+
+// =========================
+// 安全数値変換
+// =========================
+function toNumberSafe(val) {
+  const num = Number(val);
+  return isNaN(num) ? null : num;
+}
 
 // =========================
 // 全角→半角
@@ -21,7 +32,7 @@ function normalizeText(text) {
 }
 
 // =========================
-// Flexボタン（大きくて見やすい）
+// メニューUI（ボタン）
 // =========================
 function sendMainMenu(replyToken, text) {
   return client.replyMessage(replyToken, {
@@ -34,7 +45,7 @@ function sendMainMenu(replyToken, text) {
         layout: 'vertical',
         spacing: 'lg',
         contents: [
-          { type: 'text', text: text, weight: 'bold', size: 'lg' },
+          { type: 'text', text, weight: 'bold', size: 'lg' },
 
           {
             type: 'button',
@@ -65,11 +76,15 @@ function sendMainMenu(replyToken, text) {
 }
 
 // =========================
-// 料金計算（24h最大）
+// 料金計算（24h最大対応）
 // =========================
 function calculatePrice(data, now) {
+  if (!data?.startTime || !data?.unitValue || !data?.ratePerUnit) return 0;
+
   const start = new Date(data.startTime);
   const diffMs = now - start;
+
+  if (diffMs <= 0) return 0;
 
   const totalMinutes = Math.ceil(diffMs / (1000 * 60));
   const minutesPerDay = 1440;
@@ -82,17 +97,20 @@ function calculatePrice(data, now) {
       ? data.unitValue * 60
       : data.unitValue;
 
+  if (!unitMinutes || unitMinutes <= 0) return 0;
+
   let totalPrice = 0;
 
+  // 1日最大
   if (data.maxPrice) {
     totalPrice += days * data.maxPrice;
   }
 
-  if (remainingMinutes <= data.freeMinutes) {
-    return totalPrice;
-  }
+  // 無料時間
+  const free = data.freeMinutes || 0;
+  if (remainingMinutes <= free) return totalPrice;
 
-  remainingMinutes -= data.freeMinutes;
+  remainingMinutes -= free;
 
   let remainingPrice =
     Math.ceil(remainingMinutes / unitMinutes) * data.ratePerUnit;
@@ -103,11 +121,11 @@ function calculatePrice(data, now) {
 
   totalPrice += remainingPrice;
 
-  return totalPrice;
+  return Math.max(0, Math.floor(totalPrice));
 }
 
 // =========================
-// メイン
+// メイン処理
 // =========================
 module.exports = async (req, res) => {
   if (req.method !== 'POST') return res.status(405).send();
@@ -122,7 +140,7 @@ module.exports = async (req, res) => {
 };
 
 // =========================
-// イベント処理
+// イベント
 // =========================
 async function handleEvent(event) {
   if (event.type !== 'message') return;
@@ -139,14 +157,14 @@ async function handleEvent(event) {
   }
 
   // =========================
-  // 初期メニュー
+  // メニュー
   // =========================
   if (text === 'メニュー') {
-    return sendMainMenu(event.replyToken, '操作を選択してください');
+    return sendMainMenu(event.replyToken, 'メニュー');
   }
 
   // =========================
-  // 設定開始（ボタン）
+  // 設定開始
   // =========================
   if (text === '開始') {
     parkingData[userId] = { step: 'unitType', temp: {} };
@@ -170,42 +188,73 @@ async function handleEvent(event) {
         state.step = 'unitValue';
         return client.replyMessage(event.replyToken, {
           type: 'text',
-          text: '何分（何時間）ごと？（数字）',
+          text: '単位の数値は？（例：30）',
         });
 
-      case 'unitValue':
-        state.temp.unitValue = Number(text);
+      case 'unitValue': {
+        const num = toNumberSafe(text);
+        if (num === null || num <= 0) {
+          return client.replyMessage(event.replyToken, {
+            type: 'text',
+            text: '数字で入力してください🙏',
+          });
+        }
+        state.temp.unitValue = num;
         state.step = 'rate';
         return client.replyMessage(event.replyToken, {
           type: 'text',
-          text: '料金は？（円）',
+          text: '料金は？',
         });
+      }
 
-      case 'rate':
-        state.temp.ratePerUnit = Number(text);
+      case 'rate': {
+        const num = toNumberSafe(text);
+        if (num === null || num < 0) {
+          return client.replyMessage(event.replyToken, {
+            type: 'text',
+            text: '数字で入力してください🙏',
+          });
+        }
+        state.temp.ratePerUnit = num;
         state.step = 'max';
         return client.replyMessage(event.replyToken, {
           type: 'text',
-          text: '24時間最大料金は？（なし or 数字）',
+          text: '24時間最大料金（なし or 数字）',
         });
+      }
 
       case 'max':
         state.temp.maxPrice =
-          text === 'なし' ? null : Number(text);
+          text === 'なし' ? null : toNumberSafe(text);
+
+        if (text !== 'なし' && state.temp.maxPrice === null) {
+          return client.replyMessage(event.replyToken, {
+            type: 'text',
+            text: '「なし」か数字で入力してください🙏',
+          });
+        }
+
         state.step = 'free';
         return client.replyMessage(event.replyToken, {
           type: 'text',
-          text: '無料時間は？（分・数字）',
+          text: '無料時間（分）',
         });
 
-      case 'free':
-        state.temp.freeMinutes = Number(text);
+      case 'free': {
+        const num = toNumberSafe(text);
+        if (num === null || num < 0) {
+          return client.replyMessage(event.replyToken, {
+            type: 'text',
+            text: '数字で入力してください🙏',
+          });
+        }
 
-        parkingData[userId] = {
-          ...state.temp,
-        };
+        state.temp.freeMinutes = num;
 
-        return sendMainMenu(event.replyToken, '✅ 設定完了');
+        parkingData[userId] = { ...state.temp };
+
+        return sendMainMenu(event.replyToken, '設定完了');
+      }
     }
   }
 
@@ -215,7 +264,7 @@ async function handleEvent(event) {
   if (text === '駐車開始') {
     const data = parkingData[userId];
 
-    if (!data.ratePerUnit) {
+    if (!data?.ratePerUnit) {
       return sendMainMenu(event.replyToken, '先に設定してください');
     }
 
@@ -223,7 +272,7 @@ async function handleEvent(event) {
 
     return sendMainMenu(
       event.replyToken,
-      `🚗 駐車開始\n${now.toLocaleTimeString('ja-JP')}`
+      `駐車開始\n${now.toLocaleTimeString('ja-JP')}`
     );
   }
 
@@ -233,7 +282,7 @@ async function handleEvent(event) {
   if (text === '今の料金') {
     const data = parkingData[userId];
 
-    if (!data.startTime) {
+    if (!data?.startTime) {
       return sendMainMenu(event.replyToken, '駐車開始してください');
     }
 
@@ -241,33 +290,35 @@ async function handleEvent(event) {
 
     return sendMainMenu(
       event.replyToken,
-      `💰 現在 ${price}円`
+      `現在 ${price}円`
     );
   }
 
   // =========================
-  // 駐車終了
+  // 駐車終了（テキスト表示分離）
   // =========================
   if (text === '駐車終了') {
     const data = parkingData[userId];
 
-    if (!data.startTime) {
+    if (!data?.startTime) {
       return sendMainMenu(event.replyToken, '駐車開始してください');
     }
 
     const price = calculatePrice(data, now);
 
-    const start = new Date(data.startTime)
-      .toLocaleTimeString('ja-JP');
+    const start = new Date(data.startTime).toLocaleTimeString('ja-JP');
     const end = now.toLocaleTimeString('ja-JP');
 
     delete parkingData[userId];
 
-    return sendMainMenu(
-      event.replyToken,
-      `🏁 駐車時間 ${start}〜${end}\n💰 ${price}円`
-    );
+    return client.replyMessage(event.replyToken, {
+      type: 'text',
+      text:
+        `駐車終了\n` +
+        `駐車時間：${start}〜${end}\n` +
+        `駐車料金：${price}円`,
+    });
   }
 
-  return sendMainMenu(event.replyToken, 'メニューから選択してください');
+  return sendMainMenu(event.replyToken, 'メニューから選択');
 }
