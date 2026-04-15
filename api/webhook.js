@@ -30,13 +30,13 @@ async function handleEvent(event) {
 
   const userId = event.source.userId;
   const text = event.message.text;
-  const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Tokyo" }));
+  const now = new Date();
 
   let replyText = '';
 
   if (text === '駐車開始') {
     parkingData[userId] = now;
-    replyText = 駐車を開始しました！\n開始時刻: ${now.toLocaleTimeString('ja-JP')};
+    replyText = `駐車を開始しました！\n開始時刻: ${now.toLocaleTimeString('ja-JP')}`;
   } else if (text === '今の料金' || text === '駐車終了') {
     const startTime = parkingData[userId];
 
@@ -48,10 +48,10 @@ async function handleEvent(event) {
       const price = Math.ceil(diffMins / 30) * 100;
 
       if (text === '今の料金') {
-        replyText = 経過時間: ${diffMins}分\n現在の料金: ${price}円です。;
+        replyText = `経過時間: ${diffMins}分\n現在の料金: ${price}円です。`;
       } else {
         delete parkingData[userId];
-        replyText = 駐車を終了しました。\n合計時間: ${diffMins}分\nお疲れ様でした！;
+        replyText = `駐車を終了しました。\n合計時間: ${diffMins}分\nお疲れ様でした！`;
       }
     }
   } else {
