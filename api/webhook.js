@@ -18,20 +18,24 @@ module.exports = async (req, res) => {
     return res.status(405).send('Method Not Allowed');
   }
 
-  let body;
+  // 🔥 body安全取得（最強版）
+  let body = {};
 
   try {
-    body = typeof req.body === 'string'
-      ? JSON.parse(req.body)
-      : req.body;
+    if (req.body) {
+      body = typeof req.body === 'string'
+        ? JSON.parse(req.body)
+        : req.body;
+    } else {
+      console.log('bodyが空');
+    }
   } catch (e) {
     console.error('JSON parseエラー:', e);
-    return res.status(400).send('Invalid JSON');
   }
 
   console.log('body:', body);
 
-  const events = body?.events || [];
+  const events = body?.events ?? [];
 
   if (!events.length) {
     console.log('イベントなし');
@@ -39,7 +43,16 @@ module.exports = async (req, res) => {
   }
 
   try {
-    await Promise.all(events.map(handleEvent));
+    // 🔥 Promise.allやめて安全処理
+    for (const event of events) {
+      try {
+        console.log('event:', event);
+        await handleEvent(event);
+      } catch (err) {
+        console.error('event処理エラー:', err);
+      }
+    }
+
     res.status(200).send('OK');
   } catch (err) {
     console.error('Webhook全体エラー:', err);
